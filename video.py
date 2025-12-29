@@ -4,7 +4,6 @@ import shutil
 import numpy as np
 import torch
 import argparse
-import sys
 import contextlib
 from dreamer import DeepDreamer
 import optical_flow as flow_est
