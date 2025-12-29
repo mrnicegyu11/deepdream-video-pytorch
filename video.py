@@ -26,6 +26,17 @@ def filter_args(args_list, keys_to_remove):
         filtered.append(arg)
     return filtered
 
+def calculate_occlusion_mask(current_frame, warped_prev_frame, threshold=30):
+    diff = cv2.absdiff(current_frame, warped_prev_frame)
+    gray_diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    _, mask = cv2.threshold(gray_diff, threshold, 255, cv2.THRESH_BINARY_INV)
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.GaussianBlur(mask, (9, 9), 0)
+    
+    float_mask = mask.astype(np.float32) / 255.0
+    return np.expand_dims(float_mask, axis=2), mask
+
 def update_output_video(output_path, frames_dir, width, height, fps, count):
     temp_output = output_path + ".tmp.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -43,11 +54,9 @@ def update_output_video(output_path, frames_dir, width, height, fps, count):
                 frames_written += 1
     
     out.release()
-    
     if os.path.exists(output_path):
         os.remove(output_path)
     os.rename(temp_output, output_path)
-    
     print(f"[Video Update] Refreshed {output_path} with {frames_written} frames.")
 
 def process_video(args, dreamer_args):
@@ -62,19 +71,18 @@ def process_video(args, dreamer_args):
         input_frames_dir = os.path.join(abs_temp_dir, "input")
         output_frames_dir = os.path.join(abs_temp_dir, "output")
         flow_frames_dir = os.path.join(abs_temp_dir, "flow")
+        mask_frames_dir = os.path.join(abs_temp_dir, "mask")  # NEW DIR
 
         print(f"Creating temporary directories at: {abs_temp_dir}")
         os.makedirs(input_frames_dir, exist_ok=True)
         os.makedirs(output_frames_dir, exist_ok=True)
         os.makedirs(flow_frames_dir, exist_ok=True)
+        os.makedirs(mask_frames_dir, exist_ok=True) # Create mask folder
 
         print("Initializing Optical Flow (RAFT)...")
         with suppressor:
             raft_model, raft_transforms, device = flow_est.init_raft()
         
-        if args.debug:
-            print(f"Forwarding arguments to DeepDreamer: {clean_dreamer_args}")
-
         if not os.path.exists(args.content_video):
             raise FileNotFoundError(f"Input video not found at: {args.content_video}")
 
@@ -91,7 +99,6 @@ def process_video(args, dreamer_args):
 
         output_width = None
         output_height = None
-
         frame_count = 0
         prev_frame = None
         prev_dream = None
@@ -106,115 +113,85 @@ def process_video(args, dreamer_args):
             with suppressor:
                 dreamer = DeepDreamer(clean_dreamer_args)
 
-            input_frame_path = os.path.join(
-                input_frames_dir, f"frame_{frame_count:06d}.jpg"
-            )
-            output_frame_path = os.path.join(
-                output_frames_dir, f"frame_{frame_count:06d}.jpg"
-            )
-            flow_path = os.path.join(
-                flow_frames_dir, f"flow_{frame_count:06d}.jpg"
-            )
+            input_frame_path = os.path.join(input_frames_dir, f"frame_{frame_count:06d}.jpg")
+            output_frame_path = os.path.join(output_frames_dir, f"frame_{frame_count:06d}.jpg")
+            flow_path = os.path.join(flow_frames_dir, f"flow_{frame_count:06d}.jpg")
+            mask_path = os.path.join(mask_frames_dir, f"mask_{frame_count:06d}.jpg") # Path for mask
 
             img_to_dream = frame.copy()
 
             if prev_frame is not None:
                 with suppressor:
                     flow_data, flow_vis = flow_est.estimate_flow(
-                        prev_frame,
-                        frame,
-                        raft_model,
-                        raft_transforms,
-                        device
+                        prev_frame, frame, raft_model, raft_transforms, device
                     )
-
                 cv2.imwrite(flow_path, flow_vis)
 
                 if prev_dream is not None:
                     if prev_dream.shape[:2] != frame.shape[:2]:
-                        prev_dream = cv2.resize(
-                            prev_dream,
-                            (frame.shape[1], frame.shape[0]),
-                            interpolation=cv2.INTER_LINEAR
-                        )
+                        prev_dream = cv2.resize(prev_dream, (frame.shape[1], frame.shape[0]))
 
-                    warped_prev_dream = flow_est.warp_image(
-                        prev_dream, flow_data
-                    )
+                    warped_prev_dream = flow_est.warp_image(prev_dream, flow_data)
+                    warped_prev_frame = flow_est.warp_image(prev_frame, flow_data)
+
+                    # Get both Float mask (for math) and Visual mask (for saving)
+                    mask, mask_vis = calculate_occlusion_mask(frame, warped_prev_frame, threshold=30)
+                    
+                    # SAVE THE MASK
+                    cv2.imwrite(mask_path, mask_vis)
+
+                    decayed_dream = cv2.addWeighted(warped_prev_dream, args.decay, frame, (1 - args.decay), 0)
+                    guided_dream = (mask * decayed_dream) + ((1 - mask) * frame)
+                    guided_dream = guided_dream.astype(np.uint8)
 
                     img_to_dream = cv2.addWeighted(
-                        frame,
-                        args.blend,
-                        warped_prev_dream,
-                        (1 - args.blend),
-                        0
+                        frame, args.blend, guided_dream, (1 - args.blend), 0
                     )
             else:
                 cv2.imwrite(flow_path, np.zeros_like(frame))
+                cv2.imwrite(mask_path, 255 * np.ones((height, width), dtype=np.uint8))
 
             prev_frame = frame.copy()
-
             cv2.imwrite(input_frame_path, img_to_dream)
 
             with suppressor:
                 dreamer.dream(input_frame_path, output_frame_path)
-
+            
             del dreamer
-
-            if torch.backends.mps.is_available():
-                torch.mps.empty_cache()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if torch.backends.mps.is_available(): torch.mps.empty_cache()
+            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
             if os.path.exists(output_frame_path):
                 prev_dream = cv2.imread(output_frame_path)
                 if prev_dream is not None:
-                    if output_width is None or output_height is None:
+                    if output_width is None:
                         output_height, output_width = prev_dream.shape[:2]
-                        print(f"DeepDream output size detected: {output_width}x{output_height}")
-                    
             else:
                 print(f"Warning: Output missing at {output_frame_path}")
 
             frame_count += 1
-
             if frame_count % args.update_interval == 0 and output_width is not None:
-                update_output_video(
-                    args.output_video, 
-                    output_frames_dir, 
-                    output_width, 
-                    output_height, 
-                    fps, 
-                    frame_count
-                )
+                update_output_video(args.output_video, output_frames_dir, output_width, output_height, fps, frame_count)
 
         cap.release()
-        
         if output_width is not None:
-            print("Finalizing video...")
             update_output_video(args.output_video, output_frames_dir, output_width, output_height, fps, frame_count)
-        else:
-            print("Error: No frames were successfully processed")
 
     finally:
         if os.path.exists(abs_temp_dir) and not args.keep_temp:
-            print(f"Cleaning up temp directory: {abs_temp_dir}")
+            print(f"Cleaning up: {abs_temp_dir}")
             shutil.rmtree(abs_temp_dir)
-        elif args.keep_temp:
-             print(f"Keeping temp directory: {abs_temp_dir}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Video DeepDream CLI with Optical Flow Stability")
-    
+    parser = argparse.ArgumentParser(description="Video DeepDream CLI")
     parser.add_argument("-content_video", type=str, default="input.mp4", help="Path to input video")
     parser.add_argument("-output_video", type=str, default="output.mp4", help="Path to output video")
-    
     parser.add_argument("-temp_dir", type=str, default="temp", help="Directory for temporary frames")
-    parser.add_argument("-blend", type=float, default=0.5, help="Blend weight (0.0=Pure Warp, 1.0=No Warp)")
+    parser.add_argument("-blend", type=float, default=0.5, help="Blend weight")
+    parser.add_argument("-decay", type=float, default=0.95, help="Dream preservation factor")
     parser.add_argument("-update_interval", type=int, default=5, help="Update output video every N frames")
-    parser.add_argument("-debug", action="store_true", help="Enable stdout from the dreamer")
-    parser.add_argument("-keep_temp", action="store_true", help="Do not delete temp directory after finishing")
+    parser.add_argument("-debug", action="store_true", help="Enable stdout")
+    parser.add_argument("-keep_temp", action="store_true", help="Do not delete temp directory")
 
     args, unknown_args = parser.parse_known_args()
-
     process_video(args, unknown_args)
