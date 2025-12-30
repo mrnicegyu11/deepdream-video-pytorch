@@ -2,11 +2,17 @@
 
 This is a fork of [neural-dream](https://github.com/ProGamerGov/neural-dream), a PyTorch implementation of DeepDream. This fork introduces **optical flow estimation** and **occlusion masking** to apply DeepDream to videos with temporal consistency.
 
+https://github.com/user-attachments/assets/c7a720af-d8f7-49c2-b145-7e7e9045b3ed
+
+https://github.com/user-attachments/assets/99e6a39e-7451-4c00-a341-e4ecf52a727d
+
 ## Features
 
-* **Standard DeepDream**: The original, robust single-image implementation.
+* **Standard DeepDream**: The original single-image implementation.
 * **Video DeepDream**: New CLI (`video_dream.py`) that uses RAFT Optical Flow to warp previous dream frames into the current frame, ensuring smooth transitions and object tracking.
 * **Occlusion Masking**: Automatically detects when objects move in front of one another to prevent "ghosting" artifacts.
+
+https://github.com/user-attachments/assets/7e90c4e4-491a-4073-a65e-528e5d1bb6c6
 
 ## Setup
 
