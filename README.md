@@ -42,7 +42,7 @@ python models/download_models.py
 To download all compatible models:
 
 ```bash
-python models/download_models.py -models all
+python models/download_models.py -models all-caffe-googlenet
 ```
 
 ## Usage
@@ -74,9 +74,9 @@ python video_dream.py -content_video input.mp4 -output_video output.mp4 -num_ite
 
 ---
 
-### 2. Standard DeepDream Arguments (Available for Video & Single Images)
+### 2. Standard DeepDream Arguments
 
-All of the following arguments work with **both** `video_dream.py` and `neural_dream.py`. When processing videos, these control how each frame is processed. You can mix and match any of these with the video-specific arguments above.
+All of the following arguments are from the single frame implementation, and you can mix and match any of these with the video-specific arguments above. Refer to [neural-dream](https://github.com/ProGamerGov/neural-dream) for more information on single frame parameters.
 
 **Example combining video and standard args:**
 
