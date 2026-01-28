@@ -8,6 +8,11 @@ import contextlib
 from dreamer import DeepDreamer
 import optical_flow as flow_est
 
+# --------------------------------------------------------------
+# 1. Add near the top (after imports):
+# --------------------------------------------------------------
+MODEL_INPUT_SIZE = 224  # GoogLeNet standard
+
 def get_suppressor(show_output):
     if show_output:
         return contextlib.nullcontext()
@@ -142,20 +147,50 @@ def process_video(args, dreamer_args):
                     cv2.imwrite(mask_path, 255 * np.ones((height, width), dtype=np.uint8))
 
             prev_frame = frame.copy()
+
+            # --------------------------------------------------------------
+            # 2. Inside the main loop, right before writing the input frame:
+            # *** RESIZE FRAME FOR MODEL INPUT ***
+            # --------------------------------------------------------------
+            img_to_dream = cv2.resize(
+                img_to_dream,
+                (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
+                interpolation=cv2.INTER_LANCZOS4
+            )
+
             cv2.imwrite(input_frame_path, img_to_dream)
 
             with output_suppressor:
                 dreamer.dream(input_frame_path, output_frame_path)
             
             del dreamer
-            if torch.backends.mps.is_available(): torch.mps.empty_cache()
-            if torch.cuda.is_available(): torch.cuda.empty_cache()
 
+
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # --------------------------------------------------------------
+            # 3. After dreamer.dream() completes, upscale the result:
+            # --------------------------------------------------------------
             if os.path.exists(output_frame_path):
-                prev_dream = cv2.imread(output_frame_path)
-                if prev_dream is not None:
-                    if output_width is None:
-                        output_height, output_width = prev_dream.shape[:2]
+
+
+
+
+                dreamed_small = cv2.imread(output_frame_path)
+                # Resize back to original video dimensions
+                orig_h, orig_w = frame.shape[:2]
+                dreamed_full = cv2.resize(
+                    dreamed_small,
+                    (orig_w, orig_h),
+                    interpolation=cv2.INTER_LANCZOS4
+                )
+                cv2.imwrite(output_frame_path, dreamed_full)
+                prev_dream = dreamed_full.copy()  # Update prev_dream too
+                if output_width is None:
+                    output_height, output_width = dreamed_full.shape[:2]
             else:
                 print(f"Warning: Output missing at {output_frame_path}")
 

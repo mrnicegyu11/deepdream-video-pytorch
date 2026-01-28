@@ -1,0 +1,16 @@
+[project]
+name = "deepdream-video-pytorch"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.4.1",
+    "opencv-python>=4.13.0.90",
+    "pillow>=12.1.0",
+    "scipy>=1.17.0",
+    "torch>=2.10.0",
+    "torchaudio>=2.10.0",
+    "torchvision>=0.25.0",
+    "tqdm>=4.67.1",
+]
